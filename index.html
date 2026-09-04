@@ -267,6 +267,12 @@
           <span class="val" id="delayVal">1.5s</span>
         </div>
         <input type="range" id="delaySlider" min="0.5" max="3" step="0.1" value="1.5">
+
+        <div class="threshold-row">
+          <span>Sensitivity</span>
+          <span class="val" id="sensVal">Medium</span>
+        </div>
+        <input type="range" id="sensSlider" min="0.60" max="0.90" step="0.02" value="0.78">
       </div>
     </div>
   </div>
@@ -367,12 +373,18 @@
   const earNowEl = document.getElementById('earNow');
   const delaySlider = document.getElementById('delaySlider');
   const delayVal = document.getElementById('delayVal');
+  const sensSlider = document.getElementById('sensSlider');
+  const sensVal = document.getElementById('sensVal');
   const earChart = document.getElementById('earChart');
   const cctx = earChart.getContext('2d');
 
   let running = false;
   let modelsReady = false;
-  let baseline = 0.30;          // default assumed open-eye EAR
+  let baseline = 0.30;          // default assumed open-eye EAR, replaced by auto-calibration
+  let baselineLocked = false;   // becomes true once manual or auto calibration completes
+  let baselineSamples = [];
+  let sensitivity = 0.78;
+  let earSmoothWindow = [];
   let closedSince = null;
   let blinkArmed = false;
   let blinkCount = 0;
@@ -384,6 +396,11 @@
 
   delaySlider.addEventListener('input', () => {
     delayVal.textContent = parseFloat(delaySlider.value).toFixed(1) + 's';
+  });
+
+  sensSlider.addEventListener('input', () => {
+    sensitivity = parseFloat(sensSlider.value);
+    sensVal.textContent = sensitivity <= 0.68 ? 'Low' : sensitivity >= 0.82 ? 'High' : 'Medium';
   });
 
   function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -434,7 +451,7 @@
     cctx.stroke();
 
     // threshold line
-    const thresh = baseline * 0.78;
+    const thresh = baseline * sensitivity;
     const ty = h - ((thresh - min) / (max - min)) * h;
     cctx.strokeStyle = 'rgba(245,166,35,0.6)';
     cctx.lineWidth = 1 * devicePixelRatio;
@@ -528,6 +545,7 @@
       clearInterval(collect);
       if(samples.length){
         baseline = samples.reduce((a,b)=>a+b,0) / samples.length;
+        baselineLocked = true;
       }
       calibrateBtn.textContent = 'Calibrated ✓';
       setTimeout(() => calibrateBtn.textContent = 'Calibrate', 1500);
@@ -542,7 +560,7 @@
     overlay.height = video.videoHeight || 480;
 
     const detection = await faceapi
-      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }))
+      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.5 }))
       .withFaceLandmarks();
 
     octx.clearRect(0,0,overlay.width, overlay.height);
@@ -550,9 +568,25 @@
     if(detection){
       const leftEye = detection.landmarks.getLeftEye();
       const rightEye = detection.landmarks.getRightEye();
-      const ear = (eyeAspectRatio(leftEye) + eyeAspectRatio(rightEye)) / 2;
-      lastEar = ear;
-      earNowEl.textContent = ear.toFixed(3);
+      const rawEar = (eyeAspectRatio(leftEye) + eyeAspectRatio(rightEye)) / 2;
+      lastEar = rawEar;
+      earNowEl.textContent = rawEar.toFixed(3);
+
+      // smooth over the last few frames so one noisy reading can't mask a real closure
+      earSmoothWindow.push(rawEar);
+      if(earSmoothWindow.length > 4) earSmoothWindow.shift();
+      const ear = earSmoothWindow.reduce((a,b)=>a+b,0) / earSmoothWindow.length;
+
+      // auto-calibrate quietly during the first couple of seconds if the user hasn't calibrated manually
+      if(!baselineLocked){
+        if(rawEar > 0.15){
+          baselineSamples.push(rawEar);
+          if(baselineSamples.length > 25){
+            baseline = baselineSamples.slice(-25).reduce((a,b)=>a+b,0) / 25;
+          }
+          if(baselineSamples.length === 25) baselineLocked = true;
+        }
+      }
 
       earHistory.push(ear);
       if(earHistory.length > 80) earHistory.shift();
@@ -568,7 +602,7 @@
         octx.stroke();
       });
 
-      const threshold = baseline * 0.78;
+      const threshold = baseline * sensitivity;
       const delayMs = parseFloat(delaySlider.value) * 1000;
 
       if(ear < threshold){
