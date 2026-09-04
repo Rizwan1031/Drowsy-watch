@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drowsy Watch — Real-Time Drowsiness Detection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0A0F1C;
+    --panel: #10182B;
+    --panel-border: #1E2A44;
+    --text: #E7ECF6;
+    --muted: #7C88A4;
+    --cyan: #4FD1C5;
+    --amber: #F5A623;
+    --red: #FF5464;
+    --grid: rgba(124,136,164,0.09);
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'IBM Plex Sans', sans-serif;
+    line-height:1.55;
+  }
+  h1,h2,h3{font-family:'Sora', sans-serif; margin:0; font-weight:600;}
+  .mono{font-family:'IBM Plex Mono', monospace;}
+  a{color:inherit;}
+
+  /* background grid texture */
+  .bg-grid{
+    position:fixed; inset:0; z-index:-1;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+  }
+
+  header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:22px 5vw;
+    border-bottom:1px solid var(--panel-border);
+  }
+  .brand{display:flex; align-items:center; gap:10px;}
+  .brand-mark{
+    width:14px; height:14px; border-radius:50%;
+    background:var(--cyan);
+    box-shadow:0 0 0 3px rgba(79,209,197,0.15);
+  }
+  .brand-name{font-family:'Sora'; font-size:17px; letter-spacing:0.2px;}
+  .brand-name b{font-weight:700;}
+  nav{display:flex; gap:28px; font-size:14px; color:var(--muted);}
+  nav a{text-decoration:none; transition:color .15s;}
+  nav a:hover{color:var(--text);}
+
+  main{max-width:1180px; margin:0 auto; padding:0 5vw;}
+
+  /* HERO */
+  .hero-intro{padding:56px 0 34px; max-width:640px;}
+  .hero-intro .kicker{color:var(--cyan); font-size:14px; margin-bottom:14px; font-family:'IBM Plex Mono';}
+  .hero-intro h1{font-size:clamp(30px,4vw,44px); line-height:1.15;}
+  .hero-intro p{color:var(--muted); font-size:16px; margin-top:16px; max-width:520px;}
+
+  .console{
+    display:grid;
+    grid-template-columns: 1.55fr 1fr;
+    gap:20px;
+    padding-bottom:60px;
+  }
+  @media (max-width:860px){ .console{grid-template-columns:1fr;} }
+
+  .video-panel{
+    position:relative;
+    background:#050810;
+    border:1px solid var(--panel-border);
+    border-radius:4px;
+    overflow:hidden;
+    aspect-ratio: 4/3;
+  }
+  video, canvas.overlay{
+    position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+  }
+  video{ transform:scaleX(-1); }
+  canvas.overlay{ transform:scaleX(-1); }
+
+  .hud-corner{
+    position:absolute; width:22px; height:22px; z-index:3; pointer-events:none;
+    border-color:var(--cyan); opacity:0.7;
+  }
+  .hud-corner.tl{top:14px; left:14px; border-top:2px solid; border-left:2px solid;}
+  .hud-corner.tr{top:14px; right:14px; border-top:2px solid; border-right:2px solid;}
+  .hud-corner.bl{bottom:14px; left:14px; border-bottom:2px solid; border-left:2px solid;}
+  .hud-corner.br{bottom:14px; right:14px; border-bottom:2px solid; border-right:2px solid;}
+
+  .video-placeholder{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; color:var(--muted); z-index:2; text-align:center; padding:0 30px;
+  }
+  .video-placeholder .icon{
+    width:56px; height:56px; border-radius:50%; border:1px solid var(--panel-border);
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .video-controls{
+    position:absolute; left:14px; bottom:14px; display:flex; gap:10px; z-index:4;
+  }
+  .video-status{
+    position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:4;
+    padding:6px 16px; border-radius:20px; font-family:'IBM Plex Mono'; font-size:12px;
+    background:rgba(5,8,16,0.75); border:1px solid var(--panel-border); backdrop-filter:blur(4px);
+    display:flex; align-items:center; gap:8px;
+  }
+  .video-status .dot{width:7px; height:7px; border-radius:50%; background:var(--muted);}
+  .video-status.awake .dot{background:var(--cyan); box-shadow:0 0 8px var(--cyan);}
+  .video-status.warn .dot{background:var(--amber); box-shadow:0 0 8px var(--amber);}
+  .video-status.alert .dot{background:var(--red); box-shadow:0 0 10px var(--red);}
+
+  .flash-alert{
+    position:absolute; inset:0; z-index:5; pointer-events:none;
+    background:rgba(255,84,100,0.0);
+    transition:background .25s;
+  }
+  .flash-alert.on{
+    animation:pulseAlert 0.9s ease-in-out infinite;
+  }
+  @keyframes pulseAlert{
+    0%,100%{background:rgba(255,84,100,0.08); box-shadow:inset 0 0 0px rgba(255,84,100,0);}
+    50%{background:rgba(255,84,100,0.22); box-shadow:inset 0 0 60px rgba(255,84,100,0.55);}
+  }
+
+  button{
+    font-family:'IBM Plex Sans'; font-size:13px; font-weight:500;
+    padding:9px 16px; border-radius:3px; cursor:pointer;
+    border:1px solid var(--panel-border); background:rgba(16,24,43,0.9); color:var(--text);
+    transition:border-color .15s, background .15s;
+  }
+  button:hover{border-color:var(--cyan);}
+  button.primary{background:var(--cyan); color:#04201D; border-color:var(--cyan); font-weight:600;}
+  button.primary:hover{background:#68e0d5;}
+  button:disabled{opacity:0.4; cursor:not-allowed;}
+
+  .sidebar{display:flex; flex-direction:column; gap:14px;}
+  .panel{
+    background:var(--panel); border:1px solid var(--panel-border); border-radius:4px; padding:18px 20px;
+  }
+  .status-panel .label{color:var(--muted); font-size:12px; font-family:'IBM Plex Mono'; letter-spacing:0.3px;}
+  .status-panel .big-status{font-family:'Sora'; font-size:28px; font-weight:700; margin-top:6px;}
+  .status-panel .big-status.awake{color:var(--cyan);}
+  .status-panel .big-status.warn{color:var(--amber);}
+  .status-panel .big-status.alert{color:var(--red);}
+  .status-panel .sub{color:var(--muted); font-size:13px; margin-top:4px;}
+
+  .ear-chart{width:100%; height:74px; display:block; margin-top:12px;}
+
+  .metrics-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .metric{padding:12px 14px; background:rgba(255,255,255,0.02); border:1px solid var(--panel-border); border-radius:3px;}
+  .metric .n{font-family:'IBM Plex Mono'; font-size:22px; font-weight:600;}
+  .metric .l{color:var(--muted); font-size:12px; margin-top:2px;}
+
+  .threshold-row{display:flex; align-items:center; justify-content:space-between; margin-top:14px; font-size:13px;}
+  .threshold-row .val{font-family:'IBM Plex Mono'; color:var(--cyan);}
+  input[type=range]{width:100%; margin-top:8px; accent-color:var(--cyan);}
+
+  /* HOW IT WORKS */
+  section.how{padding:50px 0 60px; border-top:1px solid var(--panel-border);}
+  section.how h2{font-size:26px; margin-bottom:8px;}
+  section.how > p{color:var(--muted); max-width:560px; margin-top:6px;}
+  .steps{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:34px;}
+  @media (max-width:860px){.steps{grid-template-columns:1fr;}}
+  .step{border-top:2px solid var(--panel-border); padding-top:16px;}
+  .step .idx{font-family:'IBM Plex Mono'; color:var(--muted); font-size:13px;}
+  .step h3{font-size:17px; margin-top:8px;}
+  .step p{color:var(--muted); font-size:14px; margin-top:8px;}
+
+  /* EAR EXPLAINER */
+  section.explain{padding:10px 0 70px; display:grid; grid-template-columns:1fr 1fr; gap:40px; align-items:center;}
+  @media (max-width:860px){section.explain{grid-template-columns:1fr;}}
+  section.explain h2{font-size:24px;}
+  section.explain p{color:var(--muted); font-size:14.5px; margin-top:14px;}
+  .formula{
+    margin-top:18px; padding:16px 18px; background:var(--panel); border:1px solid var(--panel-border);
+    border-radius:4px; font-family:'IBM Plex Mono'; font-size:14px; color:var(--cyan);
+  }
+  .eye-diagram{width:100%; height:auto;}
+
+  footer{
+    border-top:1px solid var(--panel-border); padding:28px 5vw 40px;
+    display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;
+    color:var(--muted); font-size:13px;
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+
+<header>
+  <div class="brand">
+    <div class="brand-mark"></div>
+    <div class="brand-name">Drowsy <b>Watch</b></div>
+  </div>
+  <nav>
+    <a href="#monitor">Monitor</a>
+    <a href="#how">How it works</a>
+    <a href="#explain">The science</a>
+  </nav>
+</header>
+
+<main>
+
+  <div class="hero-intro">
+    <div class="kicker">// FATIGUE DETECTION, RUN LOCALLY IN YOUR BROWSER</div>
+    <h1>Catch drowsiness before it catches you.</h1>
+    <p>Drowsy Watch tracks eye closure in real time through your webcam and raises an alert the moment your eyes stay shut too long. Nothing is uploaded — every frame is processed on this device.</p>
+  </div>
+
+  <div class="console" id="monitor">
+    <div class="video-panel">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="overlay" class="overlay"></canvas>
+      <div class="hud-corner tl"></div>
+      <div class="hud-corner tr"></div>
+      <div class="hud-corner bl"></div>
+      <div class="hud-corner br"></div>
+      <div class="flash-alert" id="flashAlert"></div>
+
+      <div class="video-status" id="videoStatus">
+        <span class="dot"></span><span id="videoStatusText">CAMERA OFF</span>
+      </div>
+
+      <div class="video-placeholder" id="placeholder">
+        <div class="icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M15 8V6a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2h8a2 2 0 002-2v-2l4 3V5l-4 3z" stroke="#7C88A4" stroke-width="1.6" stroke-linejoin="round"/></svg>
+        </div>
+        <div id="placeholderText">Camera is off. Start the monitor to begin tracking.</div>
+      </div>
+
+      <div class="video-controls">
+        <button class="primary" id="startBtn">Start monitor</button>
+        <button id="calibrateBtn" disabled>Calibrate</button>
+      </div>
+    </div>
+
+    <div class="sidebar">
+      <div class="panel status-panel">
+        <div class="label">STATUS</div>
+        <div class="big-status" id="bigStatus">STANDBY</div>
+        <div class="sub" id="statusSub">Waiting for camera</div>
+        <canvas class="ear-chart" id="earChart"></canvas>
+      </div>
+
+      <div class="panel">
+        <div class="metrics-grid">
+          <div class="metric"><div class="n mono" id="blinkCount">0</div><div class="l">Blinks</div></div>
+          <div class="metric"><div class="n mono" id="drowsyCount">0</div><div class="l">Drowsy events</div></div>
+          <div class="metric"><div class="n mono" id="sessionTime">00:00</div><div class="l">Session time</div></div>
+          <div class="metric"><div class="n mono" id="earNow">—</div><div class="l">Current EAR</div></div>
+        </div>
+
+        <div class="threshold-row">
+          <span>Alert delay</span>
+          <span class="val" id="delayVal">1.5s</span>
+        </div>
+        <input type="range" id="delaySlider" min="0.5" max="3" step="0.1" value="1.5">
+      </div>
+    </div>
+  </div>
+
+  <section class="how" id="how">
+    <h2>How the detection works</h2>
+    <p>Three steps run continuously, roughly 10 times a second, entirely on your device.</p>
+    <div class="steps">
+      <div class="step">
+        <div class="idx">01 — Capture</div>
+        <h3>Read the face</h3>
+        <p>A lightweight neural network locates your face in each webcam frame and maps 68 landmark points across it, including six points around each eye.</p>
+      </div>
+      <div class="step">
+        <div class="idx">02 — Measure</div>
+        <h3>Score eye openness</h3>
+        <p>The eye landmarks are reduced to a single number — the eye aspect ratio — which drops sharply when the eyelids close and stays high when eyes are open.</p>
+      </div>
+      <div class="step">
+        <div class="idx">03 — Decide</div>
+        <h3>Trigger the alert</h3>
+        <p>A quick dip counts as a blink. If the ratio stays low past your alert delay, that's scored as a drowsy event and an audible alert fires immediately.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="explain" id="explain">
+    <div>
+      <h2>What is the eye aspect ratio?</h2>
+      <p>Each eye is marked by six points: two at the corners, and two pairs along the top and bottom lid. When your eyes are open, the top and bottom points sit far apart. When they close, that vertical distance collapses toward zero while the corner-to-corner width barely changes.</p>
+      <p>Dividing the vertical distances by the width gives a ratio that's high and steady while you're alert, and falls fast the moment your eyes shut — which makes it a reliable, lighting-independent signal for fatigue.</p>
+      <div class="formula">EAR = ( ‖p2−p6‖ + ‖p3−p5‖ ) / ( 2 · ‖p1−p4‖ )</div>
+    </div>
+    <div>
+      <svg class="eye-diagram" viewBox="0 0 360 200" fill="none">
+        <rect width="360" height="200" fill="#0A0F1C"/>
+        <path d="M40 100 C 80 55, 200 55, 260 100 C 200 145, 80 145, 40 100 Z" stroke="#4FD1C5" stroke-width="2"/>
+        <circle cx="40" cy="100" r="4" fill="#F5A623"/>
+        <circle cx="90" cy="68" r="4" fill="#F5A623"/>
+        <circle cx="180" cy="62" r="4" fill="#F5A623"/>
+        <circle cx="260" cy="100" r="4" fill="#F5A623"/>
+        <circle cx="185" cy="140" r="4" fill="#F5A623"/>
+        <circle cx="95" cy="136" r="4" fill="#F5A623"/>
+        <line x1="90" y1="68" x2="95" y2="136" stroke="#E7ECF6" stroke-width="1.3" stroke-dasharray="3 3"/>
+        <line x1="180" y1="62" x2="185" y2="140" stroke="#E7ECF6" stroke-width="1.3" stroke-dasharray="3 3"/>
+        <line x1="40" y1="100" x2="260" y2="100" stroke="#7C88A4" stroke-width="1.3" stroke-dasharray="3 3"/>
+        <text x="30" y="180" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p1</text>
+        <text x="80" y="55" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p2</text>
+        <text x="172" y="50" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p3</text>
+        <text x="266" y="105" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p4</text>
+        <text x="178" y="160" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p5</text>
+        <text x="80" y="156" fill="#7C88A4" font-family="IBM Plex Mono" font-size="12">p6</text>
+      </svg>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div>All video processing happens locally in this browser tab. No frames are stored or sent anywhere.</div>
+  <div>Not a certified safety device — use alongside rest, not instead of it.</div>
+</footer>
+
+<div style="max-width:1180px; margin:0 auto 60px; padding:0 5vw;">
+  <div class="panel" style="font-size:13.5px; color:var(--muted);">
+    <strong style="color:var(--text);">Camera not working?</strong> Browsers only allow camera access on secure pages —
+    <span class="mono" style="color:var(--cyan);">https://</span> or <span class="mono" style="color:var(--cyan);">http://localhost</span>.
+    Opening this file straight from disk (a <span class="mono">file://</span> address) blocks it entirely. To run it locally:
+    <ol style="margin:10px 0 0 18px; padding:0;">
+      <li>Open a terminal in the folder containing this file.</li>
+      <li>Run <span class="mono" style="color:var(--cyan);">python3 -m http.server 8000</span> (Python) or <span class="mono" style="color:var(--cyan);">npx serve</span> (Node).</li>
+      <li>Visit <span class="mono" style="color:var(--cyan);">http://localhost:8000/drowsiness-detection.html</span> in your browser.</li>
+      <li>Allow the camera permission prompt when it appears.</li>
+    </ol>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script>
+(function(){
+  const MODEL_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
+
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const octx = overlay.getContext('2d');
+  const startBtn = document.getElementById('startBtn');
+  const calibrateBtn = document.getElementById('calibrateBtn');
+  const placeholder = document.getElementById('placeholder');
+  const placeholderText = document.getElementById('placeholderText');
+  const videoStatus = document.getElementById('videoStatus');
+  const videoStatusText = document.getElementById('videoStatusText');
+  const flashAlert = document.getElementById('flashAlert');
+  const bigStatus = document.getElementById('bigStatus');
+  const statusSub = document.getElementById('statusSub');
+  const blinkCountEl = document.getElementById('blinkCount');
+  const drowsyCountEl = document.getElementById('drowsyCount');
+  const sessionTimeEl = document.getElementById('sessionTime');
+  const earNowEl = document.getElementById('earNow');
+  const delaySlider = document.getElementById('delaySlider');
+  const delayVal = document.getElementById('delayVal');
+  const earChart = document.getElementById('earChart');
+  const cctx = earChart.getContext('2d');
+
+  let running = false;
+  let modelsReady = false;
+  let baseline = 0.30;          // default assumed open-eye EAR
+  let closedSince = null;
+  let blinkArmed = false;
+  let blinkCount = 0;
+  let drowsyCount = 0;
+  let sessionStart = null;
+  let alertOn = false;
+  let earHistory = [];
+  let audioCtx = null;
+
+  delaySlider.addEventListener('input', () => {
+    delayVal.textContent = parseFloat(delaySlider.value).toFixed(1) + 's';
+  });
+
+  function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function eyeAspectRatio(eye){
+    const a = dist(eye[1], eye[5]);
+    const b = dist(eye[2], eye[4]);
+    const c = dist(eye[0], eye[3]);
+    return (a + b) / (2 * c);
+  }
+
+  function beep(danger){
+    try{
+      if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = danger ? 880 : 440;
+      gain.gain.value = 0.06;
+      osc.connect(gain); gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.18);
+    }catch(e){}
+  }
+
+  function setStatus(mode, label, sub){
+    bigStatus.textContent = label;
+    bigStatus.className = 'big-status ' + mode;
+    statusSub.textContent = sub;
+    videoStatus.className = 'video-status ' + mode;
+    videoStatusText.textContent = label;
+  }
+
+  function drawChart(){
+    const w = earChart.width = earChart.clientWidth * devicePixelRatio;
+    const h = earChart.height = earChart.clientHeight * devicePixelRatio;
+    cctx.clearRect(0,0,w,h);
+    if(earHistory.length < 2) return;
+    const max = 0.45, min = 0.05;
+    cctx.strokeStyle = '#4FD1C5';
+    cctx.lineWidth = 2 * devicePixelRatio;
+    cctx.beginPath();
+    earHistory.forEach((v, i) => {
+      const x = (i / (earHistory.length - 1)) * w;
+      const y = h - ((v - min) / (max - min)) * h;
+      i === 0 ? cctx.moveTo(x, y) : cctx.lineTo(x, y);
+    });
+    cctx.stroke();
+
+    // threshold line
+    const thresh = baseline * 0.78;
+    const ty = h - ((thresh - min) / (max - min)) * h;
+    cctx.strokeStyle = 'rgba(245,166,35,0.6)';
+    cctx.lineWidth = 1 * devicePixelRatio;
+    cctx.setLineDash([4,4]);
+    cctx.beginPath();
+    cctx.moveTo(0, ty); cctx.lineTo(w, ty);
+    cctx.stroke();
+    cctx.setLineDash([]);
+  }
+
+  function formatTime(sec){
+    const m = String(Math.floor(sec/60)).padStart(2,'0');
+    const s = String(Math.floor(sec%60)).padStart(2,'0');
+    return m + ':' + s;
+  }
+
+  async function loadModels(){
+    placeholderText.textContent = 'Loading detection models…';
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    modelsReady = true;
+  }
+
+  async function startCamera(){
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting…';
+
+    // getUserMedia only exists in secure contexts: https:// or http://localhost.
+    // Opening this file directly (file://) will not expose it at all.
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      placeholderText.innerHTML = 'Your browser is blocking camera access on this page.<br>This happens when the file is opened directly from disk. Serve it over <span class="mono">http://localhost</span> or <span class="mono">https://</span> instead — see the note below the page.';
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start monitor';
+      return;
+    }
+
+    try{
+      if(!modelsReady) await loadModels();
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width:640, height:480 }, audio:false });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+      placeholder.style.display = 'none';
+      startBtn.textContent = 'Stop monitor';
+      startBtn.disabled = false;
+      calibrateBtn.disabled = false;
+      running = true;
+      sessionStart = Date.now();
+      setStatus('awake', 'TRACKING', 'Looking for your face…');
+      requestAnimationFrame(loop);
+      setInterval(() => {
+        if(running && sessionStart){
+          sessionTimeEl.textContent = formatTime((Date.now() - sessionStart)/1000);
+        }
+      }, 1000);
+    }catch(err){
+      let msg = 'Camera access was denied or unavailable. Allow camera permissions and try again.';
+      if(err && err.name === 'NotFoundError') msg = 'No camera was found on this device.';
+      if(err && err.name === 'NotAllowedError') msg = 'Camera permission was denied. Allow camera access for this page in your browser settings, then reload.';
+      if(err && err.name === 'NotReadableError') msg = 'The camera is already in use by another application. Close it and try again.';
+      placeholderText.textContent = msg;
+      startBtn.disabled = false;
+      startBtn.textContent = 'Start monitor';
+    }
+  }
+
+  function stopCamera(){
+    running = false;
+    const stream = video.srcObject;
+    if(stream){ stream.getTracks().forEach(t => t.stop()); }
+    video.srcObject = null;
+    placeholder.style.display = 'flex';
+    placeholderText.textContent = 'Camera is off. Start the monitor to begin tracking.';
+    startBtn.textContent = 'Start monitor';
+    calibrateBtn.disabled = true;
+    flashAlert.classList.remove('on');
+    setStatus('', 'STANDBY', 'Waiting for camera');
+    octx.clearRect(0,0,overlay.width, overlay.height);
+  }
+
+  startBtn.addEventListener('click', () => {
+    if(running) stopCamera(); else startCamera();
+  });
+
+  calibrateBtn.addEventListener('click', () => {
+    calibrateBtn.textContent = 'Hold eyes open…';
+    const samples = [];
+    const collect = setInterval(() => {
+      if(lastEar) samples.push(lastEar);
+    }, 100);
+    setTimeout(() => {
+      clearInterval(collect);
+      if(samples.length){
+        baseline = samples.reduce((a,b)=>a+b,0) / samples.length;
+      }
+      calibrateBtn.textContent = 'Calibrated ✓';
+      setTimeout(() => calibrateBtn.textContent = 'Calibrate', 1500);
+    }, 1500);
+  });
+
+  let lastEar = null;
+
+  async function loop(){
+    if(!running) return;
+    overlay.width = video.videoWidth || 640;
+    overlay.height = video.videoHeight || 480;
+
+    const detection = await faceapi
+      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224 }))
+      .withFaceLandmarks();
+
+    octx.clearRect(0,0,overlay.width, overlay.height);
+
+    if(detection){
+      const leftEye = detection.landmarks.getLeftEye();
+      const rightEye = detection.landmarks.getRightEye();
+      const ear = (eyeAspectRatio(leftEye) + eyeAspectRatio(rightEye)) / 2;
+      lastEar = ear;
+      earNowEl.textContent = ear.toFixed(3);
+
+      earHistory.push(ear);
+      if(earHistory.length > 80) earHistory.shift();
+      drawChart();
+
+      // draw eye outlines on overlay
+      octx.strokeStyle = alertOn ? '#FF5464' : '#4FD1C5';
+      octx.lineWidth = 2;
+      [leftEye, rightEye].forEach(eye => {
+        octx.beginPath();
+        eye.forEach((p,i) => i===0 ? octx.moveTo(p.x,p.y) : octx.lineTo(p.x,p.y));
+        octx.closePath();
+        octx.stroke();
+      });
+
+      const threshold = baseline * 0.78;
+      const delayMs = parseFloat(delaySlider.value) * 1000;
+
+      if(ear < threshold){
+        if(closedSince === null) closedSince = Date.now();
+        const elapsed = Date.now() - closedSince;
+
+        if(elapsed > delayMs){
+          if(!alertOn){
+            alertOn = true;
+            drowsyCount++;
+            drowsyCountEl.textContent = drowsyCount;
+            flashAlert.classList.add('on');
+            beep(true);
+          }
+          setStatus('alert', 'DROWSY', 'Eyes closed — wake up!');
+        } else {
+          setStatus('warn', 'EYES CLOSED', 'Holding for ' + (elapsed/1000).toFixed(1) + 's');
+          blinkArmed = true;
+        }
+      } else {
+        if(blinkArmed && closedSince !== null && (Date.now() - closedSince) < delayMs){
+          blinkCount++;
+          blinkCountEl.textContent = blinkCount;
+          beep(false);
+        }
+        closedSince = null;
+        blinkArmed = false;
+        if(alertOn){
+          alertOn = false;
+          flashAlert.classList.remove('on');
+        }
+        setStatus('awake', 'AWAKE', 'Eyes open, tracking normally');
+      }
+    } else {
+      lastEar = null;
+      setStatus('warn', 'NO FACE', 'Face not detected in frame');
+    }
+
+    requestAnimationFrame(loop);
+  }
+
+  window.addEventListener('resize', drawChart);
+})();
+</script>
+
+</body>
+</html>
